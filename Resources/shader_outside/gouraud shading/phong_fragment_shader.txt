@@ -1,0 +1,14 @@
+// Fragment shader:
+// ================
+#version 330 core
+out vec4 FragColor;
+
+in vec3 LightingColor; 
+in vec3 fragment_color;
+
+
+void main()
+{
+   FragColor = vec4(LightingColor * fragment_color, 1.0);
+   //FragColor = vec4(fragment_color, 1.0);
+}

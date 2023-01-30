@@ -1,0 +1,116 @@
+To build we need: 
+
+- eigen via apt package: 
+sudo apt-get install libeigen3-dev
+
+- glog package (for opencv):
+sudo apt-get install -y libgoogle-glog-dev
+
+- ninja: error: '/usr/lib/x86_64-linux-gnu/libspqr.so', needed by 'PandiaScanner', missing and no known rule to make it:
+sudo apt-get install libsuitesparse-dev
+
+- ninja: error: '/usr/lib/x86_64-linux-gnu/libf77blas.so', needed by 'PandiaScanner', missing and no known rule to make it:
+sudo apt install libatlas-base-dev
+
+- libjpegturbo bugs and installed version needs to be copied in 3rdparty_install in build dir - done by cmake
+
+- the rule launch branch for kokkos is in the develop branch of kokkos. Just build the develop branch
+
+
+
+Build Kokkos without nvcc_wrapper
+
+cd out/build
+cmake ../.. \
+   -DCMAKE_CXX_COMPILER=$(which g++-8) \
+-DCMAKE_INSTALL_PREFIX=/home/tristan/dev/pandia3d/3rdParty/kokkos \
+   -DKokkos_ENABLE_OPENMP=On \
+   -DKokkos_CXX_STANDARD=14 \
+   -DKokkos_ARCH_TURING75=ON \
+   -DKokkos_ENABLE_CUDA=ON\
+   -DKokkos_ENABLE_CUDA_LAMBDA=ON\
+   -DKokkos_ENABLE_CUDA_RELOCATABLE_DEVICE_CODE=ON
+
+
+
+!!!!!!! For precompiled headers to work with kokkos:
+
+in nvcc wrapper line 197 add -include as follows (see https://github.com/kokkos/kokkos/issues/3421):
+   #Handle known nvcc args that have an argument
+-  -rdc|-maxrregcount|--default-stream|-Xnvlink|--fmad|-cudart|--cudart)
++  -rdc|-maxrregcount|--default-stream|-Xnvlink|--fmad|-cudart|--cudart|-include)
+
+
+
+Note: Change line 105 in KokkosConfigCommon.cmake to     SET(_HINTS ${CMAKE_CURRENT_LIST_DIR}/../.. ${PROJECT_SOURCE_DIR}/3rdParty/kokkos)
+so that Kokkos takes the local launcher
+
+
+Build the main project with normal g++-8
+
+echo Running Cmake Script
+cd build
+rm CMakeCache.txt
+cmake -G Ninja \
+   -D BUILD_EIGEN=On \
+   -D BUILD_OPENMP=On \
+   -D BUILD_GLEW=On \
+   -D BUILD_GLFW=ON\
+   -D BUILD_PYBIND11=OFF\
+   -D BUILD_PYTHON_MODULE=OFF \
+   -D ENABLE_JUPYTER=OFF \
+   -D WITH_SIMD=OFF \
+   -D BUILD_CUDA_EXAMPLES=OFF \
+   -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+   -D CMAKE_CXX_EXTENSIONS=OFF \
+   -D CMAKE_C_COMPILER=$(which gcc-8) \
+   -D CMAKE_CXX_COMPILER=$(which g++-8) ..
+
+
+
+
+- we need the azure kinect lib, which can be installed by
+
+azure kinect ubuntu setup:
+
+1. Paketrepository von Microsoft konfigurieren:
+
+curl -sSL https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+sudo apt-add-repository https://packages.microsoft.com/ubuntu/18.04/prod
+sudo apt-get update
+
+2. install
+
+sudo apt install k4a-tools
+sudo apt install libk4a1.4-dev
+
+3. (alternative, if 2. didn't work)
+
+wget https://packages.microsoft.com/config/ubuntu/18.04/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+sudo apt-get update
+sudo apt-get install k4a-tools
+sudo apt-get install libk4a1.4-dev
+
+
+
+
+
+In order to not need sudo for kinect do : 
+sudo cp 99-k4a.rules /etc/udev/rules.d/
+
+The rules file can be foudn under 
+https://github.com/microsoft/Azure-Kinect-Sensor-SDK/blob/develop/docs/usage.md
+
+
+Install the git glfs system to get all the libs!
+curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+sudo apt-get install git-lfs
+git lfs install
+
+
+Remove the stupid warning in  usr/include/host_defines.h so that eigen does not throw a million errros
+
+Use Visual Studio Code wiht Cmake lite for a good ide (if it works)
+
+

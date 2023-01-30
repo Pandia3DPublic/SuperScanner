@@ -1,0 +1,55 @@
+Eigen version 3.3.90 from o3d, updated ceres 2.0.0 uses this eigen (eigen hint in ceresconfig.cmake)
+dont use system wide installed eigen, libs should all use same eigen
+eigen in 3rdparty folder is from o3d, all libs should use this eigen
+
+o3d add indices eigen mat to pointcloud.h and use in pointcloudfactory.cpp --!!!!!not necessary anymore
+
+set as follows in o3d cmakelist.txt to avoid linking error:
+option(GLIBCXX_USE_CXX11_ABI      "Set -D_GLIBCXX_USE_CXX11_ABI=1"           ON )
+
+!!!!!!!!!!!Use latest GLFW version because functions are missing in o3d glfw which are required for imgui. 
+!!!!!!!!!!!Before building 03d: replace with newest glfw in o3d 3rdparty folder
+
+
+after sucessful make install, copy jsoncpp and tinygltf folder from o3d build directory to installed Open3D/include/open3d/3rdparty
+
+
+
+
+-------changes to code:
+
+pandiaview.h und .cpp:
+
+open3d::visualization::GLHelper::GLMatrix4f etc wird zu
+open3d::visualization::gl_util::GLMatrix4f
+GetMaxExtend wird zu GetMaxExtent
+
+
+Superscanner.cpp und guiwindow.cpp:
+
+PandiaGui::openOverallProgress
+PandiaGui::currentProgress
+beides undefined, wird wohl aus open3d benutzt aber dennoch unserer namespace? für progressbar von decimate
+
+
+Gpuvoxelgrid.cpp:
+
+TsdfVolume different namespace: open3d::pipelines::integration::scalabletsdfvolume
+
+
+
+todo reprojection filter indices -done
+todo mesh->simplifyQuadricDecimation now with two extra parameters
+
+
+
+linker error:
+  "directory": "/home/tim/dev/SuperScanner/build",
+  "command": "/usr/bin/g++-8 -DCERES_EXPORT_INTERNAL_SYMBOLS -DDEVELOPERTOOLS -DFMT_HEADER_ONLY=1 -DGFLAGS_IS_A_DLL=0 -DKOKKOS_DEPENDENCE -D_GLIBCXX_USE_CXX11_ABI=0 -I../src -isystem ../pchs -isystem ../3rdParty/Open3D/include -isystem ../3rdParty/opencvCuda/include/opencv4 -isystem ../3rdParty/kokkos/include -isystem ../3rdParty/Open3D/include/open3d/3rdparty -isystem ../3rdParty/ceres/include -isystem ../3rdParty/Eigen/include/eigen3 -fuse-ld=lld -O2 -g -DNDEBUG --relocatable-device-code=true -expt-extended-lambda -arch=sm_75 -std=c++14 -Winvalid-pch -include /home/tim/dev/SuperScanner/build/CMakeFiles/SuperScanner.dir/cmake_pch.hxx -o CMakeFiles/SuperScanner.dir/exe/SuperScanner.cpp.o -c /home/tim/dev/SuperScanner/exe/SuperScanner.cpp",
+  "file": "/home/tim/dev/SuperScanner/exe/SuperScanner.cpp"
+  
+  
+old default no error:
+    "directory": "/home/tristan/dev/SuperScanner/build",
+  "command": "/usr/bin/g++-8  -DDEVELOPERTOOLS -DGFLAGS_IS_A_DLL=0 -DKOKKOS_DEPENDENCE -I../src -I../3rdParty/ceres/include -I../PandiaO3D/3rdparty/Eigen/install/include/eigen3 -isystem ../PandiaO3D/src -isystem ../PandiaO3D/3rdparty -isystem ../PandiaO3D/3rdparty/zlib -isystem ../PandiaO3D/3rdparty/Eigen -isystem ../PandiaO3D/3rdparty/flann -isystem ../PandiaO3D/3rdparty/flann/algorithms -isystem ../PandiaO3D/3rdparty/flann/nn -isystem ../PandiaO3D/3rdparty/flann/util -isystem ../PandiaO3D/3rdparty/glew/include -isystem ../PandiaO3D/3rdparty/GLFW/include -isystem /usr/include/jsoncpp -isystem ../PandiaO3D/3rdparty/liblzf -isystem ../PandiaO3D/3rdparty/tomasakeninemoeller -isystem /usr/include/libpng16 -isystem ../PandiaO3D/3rdparty/rply -isystem ../PandiaO3D/3rdparty/rply/etc -isystem ../PandiaO3D/3rdparty/rply/manual -isystem ../PandiaO3D/3rdparty/tinyfiledialogs -isystem ../PandiaO3D/3rdparty/qhull/src -isystem ../PandiaO3D/3rdparty/fmt/include -isystem ../pchs -isystem ../3rdParty/opencvCuda/include/opencv4 -isystem ../3rdParty/kokkos/include -isystem 3rdparty_install/include  -fuse-ld=lld -O2 -g -DNDEBUG   --relocatable-device-code=true -expt-extended-lambda -arch=sm_75 -Xcompiler -fopenmp -std=c++14 -Winvalid-pch -include /home/tristan/dev/SuperScanner/build/CMakeFiles/SuperScanner.dir/cmake_pch.hxx -o CMakeFiles/SuperScanner.dir/exe/SuperScanner.cpp.o -c /home/tristan/dev/SuperScanner/exe/SuperScanner.cpp",
+  "file": "/home/tristan/dev/SuperScanner/exe/SuperScanner.cpp"

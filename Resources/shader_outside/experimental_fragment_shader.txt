@@ -1,0 +1,11 @@
+#version 330
+in vec3 fragment_color;
+
+out vec4 FragColor;
+
+uniform vec4 ourColor;
+
+void main()
+{
+    FragColor = vec4(ourColor.x, fragment_color.yz, 1);
+}

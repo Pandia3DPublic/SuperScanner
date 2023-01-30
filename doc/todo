@@ -1,0 +1,1 @@
+in host_defines from cuda (usr/include/host_defines) the warning is disabled that we should not use this in headers directly since eigen does it a lot!

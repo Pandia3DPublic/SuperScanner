@@ -1,0 +1,906 @@
+
+bool inside(Eigen::Vector4f& test) {
+	test = test/test(3);
+	bool out = true;
+	for (int i = 0; i < 3; i++) {
+		if (test(i) > 1 || test(i) < -1)
+			out = false;
+	}
+
+	return out;
+}
+
+shared_ptr<geometry::PointCloud> getpcd() {
+	 
+	auto pcd = io::CreatePointCloudFromFile("boardroom_down_0.01.pcd");
+
+	double max =0;
+	vector<Eigen::Vector3d> newpoints;
+	vector<Eigen::Vector3d> newcolors;
+	for (int i = 0; i < pcd->points_.size(); i++) {
+		if (pcd->points_[i](2) > max)
+			max = pcd->points_[i](2);
+		if (pcd->points_[i](2) < 67) {
+			newpoints.push_back(pcd->points_[i]-Eigen::Vector3d(0,0,64));
+			newcolors.push_back(pcd->colors_[i]);
+		}
+	}
+
+	pcd->colors_ = newcolors;
+	pcd->points_ = newpoints;
+	return pcd;
+
+}
+
+
+
+void integrate(Model& m) {
+	//cuda stuff
+	float voxel_length = 0.01f;
+	cuda::TransformCuda extrinsic = cuda::TransformCuda::Identity();
+	cuda::ScalableTSDFVolumeCuda tsdf_volume(8, voxel_length, 3 * voxel_length, extrinsic);
+
+	cuda::RGBDImageCuda rgbd(640, 480, g_cutoff, 1000.0f);
+	cuda::ScalableMeshVolumeCuda mesher(cuda::VertexWithNormalAndColor, 8, 120000);
+
+	visualization::VisualizerWithCudaModule visualizer;
+	if (!visualizer.CreateVisualizerWindow("ScalableFusion", 640,480, 250, 250)) {
+		utility::LogWarning("Failed creating OpenGL window.\n");
+	}
+	visualizer.BuildUtilities();
+	visualizer.UpdateWindowTitle();
+
+	std::shared_ptr<cuda::TriangleMeshCuda> mesh = std::make_shared<cuda::TriangleMeshCuda>();
+	//std::shared_ptr<geometry::TriangleMesh> mesh = std::make_shared<geometry::TriangleMesh>();
+	visualizer.AddGeometry(mesh);
+	visualizer.AddGeometry(getOrigin());
+
+
+	shared_ptr<geometry::LineSet> pathes = make_shared<geometry::LineSet>();
+	visualizer.AddGeometry(pathes);
+
+	//note: have to add all geometries before changing camera position, otherwise it is reset
+	camera::PinholeCameraParameters paras;
+	Eigen::Matrix4d tmp;
+	tmp<< 1, 0,0,0 
+		,0,1,0,0
+		,0,0,1,-2
+		,0,0,0,1;
+	paras.extrinsic_ = tmp.inverse();
+	paras.intrinsic_ =g_intrinsic;
+	visualizer.GetViewControl().ConvertFromPinholeCameraParameters(paras);
+	visualizer.GetViewControl().SetConstantZFar(15.0);
+	std::cout << "Start integration \n";
+
+		//auto& f = m.chunks[0]->frames[0];
+		//rgbd.Upload(*f->depth, *f->rgb);
+		//extrinsic.FromEigen(f->frametoworldtrans);
+		//tsdf_volume.Integrate(rgbd, g_intrinsic_cuda, extrinsic);
+		//f = m.chunks[0]->frames[1];
+		//rgbd.Upload(*f->depth, *f->rgb);
+		//double angle = 1.2;
+		//extrinsic.FromEigen(getRotMatrix(Eigen::Vector3d(0,0,1),angle));
+		//tsdf_volume.Integrate(rgbd, g_intrinsic_cuda, extrinsic);
+		////tsdf_volume.DeIntegrate(rgbd, g_intrinsic_cuda, extrinsic);
+		//f = m.chunks[0]->frames[2];
+		//rgbd.Upload(*f->depth, *f->rgb);
+		//extrinsic.FromEigen(f->frametoworldtrans);
+		//cout << "blub \n \n \n ";
+		//tsdf_volume.Integrate(rgbd, g_intrinsic_cuda, extrinsic);
+
+		//mesher.MarchingCubes(tsdf_volume,true);
+		//*mesh = mesher.mesh();
+
+
+	//for (int i = 0; i < m.chunks.size(); i++) {
+	//	for (int j = 0; j < m.chunks[i]->frames.size(); j++) {
+	//		cameras.push_back(m.chunks[i]->frames[j]->frametoworldtrans);
+	//	}
+	//}
+
+
+	for (int i = 0; i < m.chunks.size(); i++) {
+		for (int j = 0; j < m.chunks[i]->frames.size(); j++) {
+			auto& f = m.chunks[i]->frames[j];
+			rgbd.Upload(*f->depth, *f->rgb);
+			extrinsic.FromEigen(f->getFrametoWorldTrans());
+			Timer t("integrate");
+			tsdf_volume.Integrate(rgbd, g_intrinsic_cuda, extrinsic);
+			t.~Timer();
+			mesher.MarchingCubes(tsdf_volume,true);
+			*mesh = mesher.mesh();
+			*pathes = *getCamera(f->getFrametoWorldTrans());
+			visualizer.PollEvents(); //this takes long (5-20ms) probably blocks a lot!
+			visualizer.UpdateGeometry();
+			//visualizer.GetViewControl().SetViewMatrices(f->frametoworldtrans.inverse());
+			//std::this_thread::sleep_for(200ms);
+
+		}
+	}
+		tsdf_volume.GetAllSubvolumes();
+	std::cout << tsdf_volume.active_subvolume_entry_array_.size() << endl;
+	Timer t("integrate");
+	t.printAverage();
+	t.~Timer();
+
+
+	cout << " start deintegration \n";
+	for (int i = 0; i < m.chunks.size(); i++) {
+		for (int j = 0; j < m.chunks[i]->frames.size(); j++) {
+			auto& f = m.chunks[i]->frames[j];
+			rgbd.Upload(*f->depth, *f->rgb);
+			extrinsic.FromEigen(f->getFrametoWorldTrans());
+			Timer t2("Deintegrate");
+			tsdf_volume.DeIntegrate(rgbd, g_intrinsic_cuda, extrinsic);
+			t2.~Timer();
+			mesher.MarchingCubes(tsdf_volume,true);
+			*mesh = mesher.mesh();
+			visualizer.PollEvents(); //this takes long (5-20ms) probably blocks a lot!
+			visualizer.UpdateGeometry();
+			//visualizer.GetViewControl().SetViewMatrices(f->frametoworldtrans.inverse());
+			//std::this_thread::sleep_for(200ms);
+
+		}
+	}
+
+
+	Timer t2("Deintegrate");
+	t2.printAverage();
+	t2.~Timer();
+	std::cout << "Finished integrating \n";
+	while(true){
+		visualizer.PollEvents(); //this takes long (5-20ms) probably blocks a lot!
+		visualizer.UpdateGeometry();
+	}
+}
+
+
+
+
+
+	//do tests here
+	////basic stuff
+
+	////lost a frame
+	//g_nstart = 71;
+	//g_nread = 15;
+	//reconrun(true);
+	////model restart without continue (hard problem)
+	//g_nstart = 60;
+	//g_nread = 25;
+	//reconrun(true);
+	////hard but solved after improverd merging chunk align
+	//g_nstart = 90;
+	//g_nread = 25;
+	//reconrun(true);
+	////model restart with continue
+	//g_nstart = 50;
+	//g_nread = 50;
+	//reconrun(true);
+	////lost multiple frames in one chunk
+	//g_nstart = 80;
+	//g_nread = 120;
+	//reconrun(true);
+	////invalid chunk and continue
+
+
+	//cuda::ScalableMeshVolumeCuda mesher(cuda::VertexWithNormalAndColor, 8, 120000);
+	//std::shared_ptr<cuda::TriangleMeshCuda> mesh = std::make_shared<cuda::TriangleMeshCuda>();
+
+
+
+	//visualization::VisualizerWithCudaModule visualizer;
+	//if (!visualizer.CreateVisualizerWindow("ScalableFusion", 640, 480, 100, 100)) {
+	//	utility::LogWarning("Failed creating OpenGL window.\n");
+	//}
+	//visualizer.BuildUtilities();
+	//visualizer.UpdateWindowTitle();
+
+	//
+	//visualizer.AddGeometry(mesh);//have to add this before filling for some stupid reason
+	//visualizer.AddGeometry(getOrigin());
+
+	//camera::PinholeCameraParameters paras;
+	//Eigen::Matrix4d tmp;
+	//tmp<< 1, 0,0,0 
+	//	,0,1,0, 0
+	//	,0,0,1,-2
+	//	,0,0,0,1;
+	//paras.extrinsic_ = tmp.inverse();
+	//paras.intrinsic_ =g_intrinsic;
+	//visualizer.GetViewControl().ConvertFromPinholeCameraParameters(paras);
+	//visualizer.GetViewControl().ChangeWindowSize(1080,720);
+
+	//mesher.MarchingCubes(m.tsdf_cuda,true);
+	//*mesh = mesher.mesh();
+	//std::cout << "Finished meshing \n";
+	//while(true){
+	//	visualizer.PollEvents(); //this takes long (5-20ms) probably blocks a lot!
+	//	visualizer.UpdateGeometry();
+	//}
+	//cout << "final number of chunks is: " << m.chunks.size() << endl;
+	//utility::LogInfo("Chunk : Number of matches before filters: {}. Number of matches after filters: {} \n", ninitial, npass);
+	//utility::LogInfo("Model : Number of matches before filters: {}. Number of matches after filters: {} \n", ninitialm, npassm);
+
+	//auto mesh = m.tsdf->ExtractTriangleMesh();
+	//vector<Eigen::Matrix4d> cameras;
+	//for (int i = 0; i < m.chunks.size(); i++) {
+	//	for (int j = 0; j < m.chunks[i]->frames.size(); j++) {
+	//		cameras.push_back(m.chunks[i]->frames[j]->frametoworldtrans);
+	//	}
+	//}
+	//auto pathes = getCameraPath(cameras);
+	//visualizer.AddGeometry(pathes);
+
+
+	//std::vector<std::shared_ptr<const geometry::Geometry>> vis;
+	//if (!g_segment) {
+	//	vis.push_back(getOrigin());
+	//	vis.push_back(mesh);
+	//	vis.push_back(getCameraPath(cameras));
+	//	visualization::DrawGeometries(vis);
+	//} else {
+	//	bool truecolors = true;
+	//	auto labelmesh = m.tsdf->ExtractPointCloudwithLabels();
+	//	visualization::DrawGeometriesWithKeyCallbacks(
+	//		{ labelmesh,  getCameraPath(cameras) , getOrigin() },
+	//		{ {GLFW_KEY_SPACE,
+	//		  [&](visualization::Visualizer * vis2) {
+	//			if (truecolors) {
+	//				labelmesh->colorLabels(createColorMap(150,true));
+	//				truecolors = false;
+	//			} else {
+	//				labelmesh->showOriginalColors();
+	//				truecolors = true;
+	//			}
+	//			return true;
+	//		  }} },
+	//		"Vis", 1920, 1080);
+	//}
+
+
+
+
+
+	
+
+
+	//build pcds from keypoints for fphf
+	//vector<geometry::PointCloud> pcds;
+	//pcds.reserve(11);
+	//for (int i = 0; i < 11; i++) {
+	//	pcds.push_back(geometry::PointCloud());
+	//}
+	//for (int i = 0; i < pcds.size(); i++) {
+	//	for (int j = 0; j < m.chunks[0]->frames[i]->keypoints.size(); j++) {
+	//		pcds[i].points_.push_back(m.chunks[0]->frames[i]->keypoints[j].p.block<3, 1>(0, 0));
+	//	}
+	//}
+	//for (int i = 0; i < pcds.size(); i++) { 
+	//	if (pcds[i].HasNormals() == false) {
+	//		pcds[i].EstimateNormals();
+	//	}
+	//	pcds[i].NormalizeNormals();
+	//	pcds[i].OrientNormalsTowardsCameraLocation();
+	//}
+
+
+	//auto t1 = std::chrono::high_resolution_clock::now();
+	//for (int i = 0; i < pcds.size(); i++) {
+
+	//	auto pcd_fpfh = registration::ComputeFPFHFeature(
+	//		pcds[i], open3d::geometry::KDTreeSearchParamHybrid(0.25, 100));
+	//}
+	//for (int i = 0; i < pcds.size(); i++) {
+	//	cout << "pcd size is " << pcds[i].points_.size() << endl;
+	//}
+	//auto t2 = std::chrono::high_resolution_clock::now();
+	//auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1);
+	//std::cout << "time for 11 fpfh features: " << duration.count() << std::endl;
+
+
+
+
+//####################### kabsch compare ###############################
+//geometry::PointCloud pcda;
+//int a = 8;
+//int b = 9;
+//for (int i = 0; i < visChunk->filteredmatches(a,b).size(); i++) {
+//	pcda.points_.push_back(visChunk->filteredmatches(a, b)[i].p1.block<3, 1>(0, 0));
+//	pcda.colors_.push_back(Eigen::Vector3d(1, 0, 0));
+//}
+//pcda.Transform(visChunk->kabschtrans(a, b));
+//vis.push_back(std::make_shared<geometry::PointCloud>(pcda));
+//geometry::PointCloud pcdb;
+//for (int i = 0; i < visChunk->filteredmatches(a, b).size(); i++) {
+//	pcdb.points_.push_back(visChunk->filteredmatches(a, b)[i].p2.block<3, 1>(0, 0));
+//	pcdb.colors_.push_back(Eigen::Vector3d(0, 0, 1));
+//}
+//vis.push_back(std::make_shared<geometry::PointCloud>(pcdb));
+
+
+
+//for (int i = 0; i < visChunk->frames.size(); i++) {
+	//vischunk->frames[i]->pcd->transform(gettrans(eigen::vector3d(1.5 * i, 0, 0)));
+	//vischunk->frames[i]->pcd->transform(vischunk->frames[i]->chunktransform);
+	//vis.push_back(visChunk->frames[i]->pcd);
+	//kps
+	//for (int j = 0; j < visChunk->frames[i]->keypoints.size(); j++) {
+	//	auto tmp = geometry::TriangleMesh::CreateSphere(0.02, 10);
+	//	tmp->Transform(gettrans(visChunk->frames[i]->keypoints[j].p.block<3,1>(0,0) + Eigen::Vector3d(1.5 * i, 0, 0)));
+	//	tmp->PaintUniformColor(Eigen::Vector3d(255, 0, 0));
+	//	//vis.push_back(tmp);
+	//}
+
+//}
+////lines
+//std::shared_ptr<geometry::LineSet> ls = std::make_shared<geometry::LineSet>();
+//int a = 0;
+//int b = 3;
+//for (int j = 0; j < visChunk->filteredmatches(a , b).size(); j++) {
+//	auto& r = visChunk->filteredmatches(a , b);
+//	ls->points_.push_back(visChunk->frames[a]->keypoints[r[j].indeces(0)].p.block<3, 1>(0, 0) + Eigen::Vector3d(1.5 * a, 0, 0));
+//	ls->points_.push_back(visChunk->frames[b]->keypoints[r[j].indeces(1)].p.block<3,1>(0,0) + Eigen::Vector3d(1.5 * b, 0, 0));
+//	ls->lines_.push_back(Eigen::Vector2i(ls->points_.size() - 1, ls->points_.size() - 2));
+//}
+//vis.push_back(ls);
+
+
+
+//auto t1 = std::chrono::high_resolution_clock::now();
+//for (int i = 0; i < 660; i++) {
+//	c.getFramePairMatchIndex(0, i);
+//}
+//auto t2 = std::chrono::high_resolution_clock::now();
+//auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1);
+//std::cout << "tifme to label one picture and process it in us: " << duration.count() << std::endl;
+
+//Model m
+//m.addchunck(c);
+//m.generatetsdf();
+
+
+
+
+ //kdtree.SearchKNN(new_cloud_ptr->points_[0], nn, new_indices_vec,
+ //                    new_dists_vec);
+
+//void Frame::computeSiftPoints2()
+//{
+//	std::vector<std::vector<geometry::Image>> octaves;
+//	auto img = rgbd->depth_;
+//	auto pyramid = geometry::CreateImagePyramid(img, nr_octaves);
+//}
+//
+//void Frame::computeSiftPoints() {
+//	utility::LogDebug("computing sift points \n");
+//	float scale = initial_scale;
+//	auto tmp = *pcd;
+//	auto downpcd = std::make_shared<geometry::PointCloud>(tmp);
+//    for (int i_octave = 0; i_octave < nr_octaves; ++i_octave) { // an octave is a set of images with the same size and different blur levels!
+//		downpcd = geometry::VoxelDownSample(*pcd, scale); 
+//        if (downpcd->points_.size() < 25) {
+//			utility::LogInfo("Down sampled pcd to small \n");
+//			break;
+//		}
+//		kdtree.SetGeometry(*downpcd);
+//		detectKeypointsForOctave(downpcd,scale);
+//		scale *=2;
+//	}
+//}
+//
+//
+//void Frame::detectKeypointsForOctave(std::shared_ptr<geometry::PointCloud> downpcd, float scale){
+//	  std::vector<float> scales (nr_scales_per_octave + 3);
+//    for (int i = 0; i <= nr_scales_per_octave + 2; ++i) {
+//		scales[i] = scale * powf (2.0f, (1.0f * static_cast<float> (i) - 1.0f) / static_cast<float> (nr_scales_per_octave));
+//	}
+//
+//
+//	//compute scale space ####################################################################################
+//	Eigen::MatrixXf diff_of_gauss;
+//	diff_of_gauss.resize (downpcd->points_.size (), scales.size () - 1);
+//	float max_radius = 3.0f * scales.back();
+//	int nk;
+//	std::vector<int> new_indices_vec;
+//	std::vector<double> new_dists_vec;
+//	for (int i = 0; i < downpcd->points_.size(); ++i) {
+//		nk = kdtree.SearchRadius (downpcd->points_[i], max_radius, new_indices_vec, new_dists_vec);
+//		float filter_response = 0.0f;
+//		float previous_filter_response;
+//
+//		for (size_t i = 0; i < scales.size (); ++i){		
+//			float sigma_sqr = powf (scales[i], 2.0f);
+//			float numerator = 0.0f;
+//			float denominator = 0.0f;
+//
+//			for (size_t i = 0; i < new_indices_vec.size (); ++i){			
+//				const float &value = (downpcd->points_[new_indices_vec[i]][0] + downpcd->points_[new_indices_vec[i]][1] +downpcd->points_[new_indices_vec[i]][2])/3.0; //intensity discrad rgb todo
+//				const float &dist_sqr = new_dists_vec[i]; //maybe we need sqrt() here todo
+//				if (dist_sqr <= 9*sigma_sqr)
+//				{
+//					float w = expf (-0.5f * dist_sqr / sigma_sqr);
+//					numerator += value * w;
+//					denominator += w;
+//				}
+//				else break; // i.e. if dist > 3 standard deviations, then terminate early
+//			}
+//
+//			previous_filter_response = filter_response;
+//			filter_response = numerator / denominator;
+//			// Compute the difference between adjacent scales
+//			if (i > 0)
+//			diff_of_gauss (i, i - 1) = filter_response - previous_filter_response;
+//		}
+//
+//	}
+//
+//	//compute the extrema in DoG smoothed images ####################################################################################
+//	std::vector<int> extrema_indices, extrema_scales;
+//	const int nr_scales = static_cast<int> (diff_of_gauss.cols());
+//	std::vector<float> min_val (nr_scales), max_val (nr_scales);
+//	for (int i_point = 0; i_point < downpcd->points_.size(); ++i_point){
+//		nk = kdtree.SearchKNN(downpcd->points_[i_point],25, new_indices_vec, new_dists_vec);
+//		// At each scale, find the extreme values of the DoG within the current neighborhood
+//		//iterate all scales
+//		for (int i_scale = 0; i_scale < nr_scales; ++i_scale){
+//			min_val[i_scale] = std::numeric_limits<float>::max ();
+//			max_val[i_scale] = -std::numeric_limits<float>::max ();
+//			//iterate all neighbours
+//			for (size_t i_neighbor = 0; i_neighbor < nk; ++i_neighbor){
+//				const float &d = diff_of_gauss (new_indices_vec[i_neighbor], i_scale);
+//				min_val[i_scale] = (std::min) (min_val[i_scale], d);
+//				max_val[i_scale] = (std::max) (max_val[i_scale], d);
+//			}
+//		}
+//
+//		//check conditions and add keypoints
+//		for (int i_scale = 1; i_scale < nr_scales - 1; ++i_scale){
+//			const float &val = diff_of_gauss (i_point, i_scale);
+//			// Does the point have sufficient contrast?
+//		    if (fabs (val) >= min_contrast){
+//			    // Is it a local minimum?
+//				if ((val == min_val[i_scale]) && (val <  min_val[i_scale - 1]) && (val <  min_val[i_scale + 1])){
+//					extrema_indices.push_back (i_point);
+//					extrema_scales.push_back (i_scale);
+//				} else if ((val == max_val[i_scale]) && (val >  max_val[i_scale - 1]) &&(val >  max_val[i_scale + 1])){ // is it local maximum?
+//					extrema_indices.push_back (i_point);
+//					extrema_scales.push_back (i_scale);
+//				}
+//			}
+//		}
+//	}
+//	
+//	// finally add keypoints to pointcloud
+//	for (int i = 0; i < extrema_indices.size(); i ++) {
+//		//std::cout << extrema_indices[i] << std::endl;
+//		//std::cout << pcd->points_[extrema_indices[i]] << std::endl;
+//		keypoint_pcd->points_.push_back(pcd->points_[extrema_indices[i]]);
+//	}
+//	keypoint_pcd->PaintUniformColor(Eigen::Vector3d(1.0,0.0,0.0));
+//	utility::LogInfo("number of keypoints: %i \n", extrema_indices.size());
+//
+//}
+
+
+
+
+	//std::vector<std::shared_ptr<const geometry::Geometry>> tmpx;
+	//tmpx.push_back(filteredImg);
+	//visualization::DrawGeometries(tmpx);
+
+
+
+
+		//cv::Mat img_matches;
+ //   drawMatches( f1->im1, f1->briskKeypoints, f2->im1, f2->briskKeypoints, good_matches, img_matches, cv::Scalar::all(-1),
+ //                cv::Scalar::all(-1), std::vector<char>(), cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS );
+ //   //-- Show detected matches
+ //   imshow("Good Matches", img_matches );
+ //   cv::waitKey();
+
+
+ // to find correspondences efficiently build a kdtree in 33-dimensions of source and use it to find closest matches quickly.
+void Chunk::findFPFHCorrespondences()
+{
+	int nsearched =2 ;
+	float thres = 0.7; // threshold for lowe distance test
+	index.resize(nsearched);
+	distance.resize(nsearched);
+	match tmp;
+
+	for (int i = 0; i<frames.size()-1; i++){
+		auto f1 = frames[i];
+		kd1.SetFeature(*(f1->keypointFeatures));
+		for (int j = i+1; j<frames.size(); j++){
+			auto f2 = frames[j];
+
+			//std::cout << "i: " << i << " j:" << j << std::endl;
+			//std::cout << "keypoint size: " << f2->keypoint_pcd->points_.size() << std::endl;
+			//std::cout << "matchcount: " << i* (frames.size() - (i+1)/2.0) + j- (i+1) << std::endl;
+
+			matches.push_back(std::vector<match>());
+			for (int k = 0; k < f2->keypoint_pcd->points_.size(); k++){
+				kd1.SearchKNN(Eigen::VectorXd(f2->keypointFeatures->data_.col(k)), nsearched, index, distance); //get the nearest keypoint index in feature space
+				//std::cout << "distance 0 " << distance[0] << std::endl;
+				//std::cout << "distance 1 " << distance[1] << std::endl;
+				if (distance[1] * thres > distance[0]){
+					tmp.indeces << index[1] , k; //get the indeces
+					tmp.d = distance[1]; // get the distance
+					matches[i* (frames.size() - (i+1)/2.0) + j- (i+1)].push_back(tmp);
+				}
+			}
+		}
+	}
+
+}
+
+
+
+
+	//auto redDepthImg = std::make_shared<geometry::Image>(); //reduced depth image
+	//redDepthImg->PrepareImage(im1.cols,im1.rows,1,4);
+	//for (auto k: briskKeypoints){
+	//	float *p2 = geometry::PointerAt<float>(*redDepthImg,static_cast<int>(k.pt.x),static_cast<int>(k.pt.y));
+	//	*p2 = (float)rgbd->depth_.FloatValueAt(k.pt.x,k.pt.y).second*1000; //need the *1000 here because CreateRGBDImageFromColorAndDepth calls ConvertDepthToFloatImage which divides by 1000 
+	//																	   //but division by 1000 already happened at generateFrames
+		//*p2 = (float)rgb->FloatValueAt(k.pt.x,k.pt.y).second;
+		//if (*p2 < 800 && *p2 > 0)
+		//std::cout << "\n x " << k.pt.x << "\n y " << k.pt.y << "\n depth " << *p2;
+	//}
+
+	//camera::PinholeCameraIntrinsic intrinsic =camera::PinholeCameraIntrinsic(camera::PinholeCameraIntrinsicParameters::PrimeSenseDefault);
+	//auto tmprgbd = geometry::CreateFromColorAndDepth(rgbd->color_, *redDepthImg ,1000.0,3.0,false);
+	//keypoint_pcd = geometry::CreateFromRGBDImage(*tmprgbd, intrinsic);
+	//keypoint_pcd->Transform(transformation);
+
+
+	void Frame::calcFPFHFeatures()
+{
+	if (keypoint_pcd->points_.size() == 0){
+		utility::LogError("There is no keypoint Pcd in calcFPFHFeatures!! \n");
+	}
+    //geometry::EstimateNormals(*keypoint_pcd, open3d::geometry::KDTreeSearchParamHybrid(0.1, 30));
+	keypoint_pcd->EstimateNormals(open3d::geometry::KDTreeSearchParamHybrid(0.1, 30));
+	//geometry::OrientNormalsTowardsCameraLocation(*keypoint_pcd);
+	keypoint_pcd->OrientNormalsTowardsCameraLocation();
+	keypointFeatures = registration::ComputeFPFHFeature(*keypoint_pcd, open3d::geometry::KDTreeSearchParamHybrid(0.25, 100));
+}
+
+
+
+
+
+//
+//
+//Eigen::VectorXd x(6 * (frames.size() - 1));
+//x.setZero();
+//
+//LMFunctor f;
+//int m = 0;
+//for (auto f : filteredmatches) {
+//	m += f.size();
+//}
+//f.m = 3 * m; //number of residuals
+//f.n = 6 * (frames.size() - 1); //number of free variables
+//f.c = this;
+//
+//Eigen::LevenbergMarquardt<LMFunctor, double> lm(f);
+//
+//int status = lm.minimize(x);
+
+//struct LMFunctor
+//{
+//	// Compute 'm' errors, one for each data point, for the given parameter values in 'x'
+//	//compute all m residuals here!
+//	int operator()(const Eigen::VectorXd& x, Eigen::VectorXd& fvec) const
+//	{
+//		//log(c->lmcount);
+//		c->lmcount++;
+//		int index = 0;
+//		for (int i = 0; i < c->frames.size() - 1; i++) {
+//			for (int j = i + 1; j < c->frames.size(); j++) {
+//				Eigen::Matrix4d T1;
+//				if (i == 0) {
+//					T1 = getIdentity();
+//				}
+//				else {
+//					T1 = getT(Eigen::Vector6d(x.block<6, 1>(6 * (i - 1), 0)));
+//				}
+//				auto T2 = getT(Eigen::Vector6d(x.block<6, 1>(6 * (j - 1), 0)));
+//				auto & f = c->filteredmatches[c->getKpMatches(i, j)];
+//				for (int k = 0; k < f.size(); k++) {
+//					//Transform both points
+//					auto err = T1 * f[k].p1 - T2 * f[k].p2;
+//					fvec.block<3, 1>(index, 0) = err.block<3, 1>(0, 0);
+//					index += 3;
+//				}
+//			}
+//		}
+//		return 0;
+//	}
+
+//	// Number of data points, i.e. values.
+//	int m;
+//	// The number of parameters, i.e. inputs.
+//	int n;
+//	// Returns 'm', the number of values.
+//	int values() const { return m; }
+//	// Returns 'n', the number of inputs.
+//	int inputs() const { return n; }
+//
+//	Chunk* c;
+//};
+
+
+
+	//auto x = endpoint[0] - startpoint[0];
+	//auto y = endpoint[1] - startpoint[1];
+	//auto z = endpoint[2] - startpoint[2];
+	//auto l = (endpoint-startpoint).norm();
+	//Eigen::Vector3d d(x,y,z);
+	//d.normalize();
+	//
+	//Eigen::Vector3d u = d.cross(Eigen::Vector3d(0,0,1));
+	//auto a = std::acos(d.dot(Eigen::Vector3d(0,0,1)));
+	//std::cout << "a: " << a << std::endl;
+	//auto t = getRotMatrix(u, a);
+
+
+	//Eigen::Matrix4d translation;
+	//translation << 1, 0 ,0 , startpoint(0)+ x/2,
+	//			   0, 1 ,0 , startpoint(1)+ y/2,
+	//			   0, 0 ,1 , startpoint(2)+ z/2,
+	//			   0, 0 ,0 , 1;
+
+	//
+	////std::cout<< l << std::endl;
+	//auto g = geometry::CreateMeshCylinder(0.005,l,3);
+
+
+	//g->PaintUniformColor(Eigen::Vector3d(0,1,0));
+	//g->Transform(translation*t);
+	//lines.push_back(g);
+
+	// better approach
+	//if (firstline){
+	//	// copy all points of the chunk in the lineset
+	//	int tmpsum = 0;
+	//	for (auto f : frames){
+	//		tmpsum += f->pcd->points_.size();
+	//	}
+	//	ls.points_.resize(tmpsum);
+	//	tmpsum = 0;
+	//	for (auto f : frames){
+	//		for (size_t i = 0; i < f->pcd->points_.size(); i++){
+	//			ls.points_[i + tmpsum] = f->pcd->points_[i];
+	//		}
+	//		tmpsum += f->pcd->points_.size();
+	//	}
+	//	firstline = false;
+	//}
+
+
+	//Eigen::Matrix4d translation;
+	//translation << 1, 0 ,0 , startpoint(0),
+	//			   0, 1 ,0 , startpoint(1),
+	//			   0, 0 ,1 , startpoint(2),
+	//			   0, 0 ,0 , 1;
+
+	//Eigen::Matrix4d Rx;
+	//double alpha = std::atan(-y/z);
+	//std::cout << "alpha: " << alpha << std::endl;
+	//Rx << 1, 0 ,0 , 0,
+	//	  0, std::cos(alpha) ,-std::sin(alpha) , 0,
+	//	  0, std::sin(alpha) ,std::cos(alpha) , 0,
+	//	  0, 0, 0 , 1;
+
+	//Eigen::Matrix4d Ry;
+	//alpha = std::atan(-x/z);
+	//std::cout << "alpha: " << alpha << std::endl;
+	//Ry << std::cos(alpha), 0 ,std::sin(alpha) , 0,
+	//	  0, 1 , 0 , 0,
+	//	  -std::sin(alpha), 0 ,std::cos(alpha) , 0,
+	//	  0, 0, 0 , 1;
+
+
+	//Eigen::Matrix4d t = translation * Ry * Rx;
+
+
+	//addLine(frames[0]->keypoint_pcd->points_[100], frames[1]->keypoint_pcd->points_[100]);
+	//frames[0]->addSphere(frames[0]->keypoint_pcd->points_[100]);
+	//frames[1]->addSphere(frames[1]->keypoint_pcd->points_[100]);
+	//frames[0]->addSphere(Eigen::Vector3d(0,0,0));
+
+	//for (int i = 0; i<frames.size()-1; i++){
+	//	auto f1 = frames[i];
+	//	for (int j = i+1; j<frames.size(); j++){
+	//		auto f2 = frames[j];
+	//		for(int k = 0; k<matches.size(); k++){
+	//			addLine(f1->keypoint_pcd->points_[matches[k](0)],f2->keypoint_pcd->points_[matches[k](1)]);
+	//		}
+	//	}
+	//}
+
+	
+	//ceres::Problem::EvaluateOptions evalops;
+	//evalops.residual_blocks = residual_block_ids;
+	//double total_cost = 0.0;
+	//std::vector<double> residuals;
+	//ceres::CRSMatrix jac;
+	//std::vector<double> grad;
+	//problem.Evaluate(evalops, &total_cost, &residuals, &grad, &jac);
+	//std::cout << " grad original result \n";
+	//for (int i = 0; i < grad.size(); i++) {
+	//	std::cout << grad[i] << std::endl;
+	//}
+	//std::cout << "total old cost " << total_cost << std::endl;
+	//std::cout << "old residuals \n ";
+	//for (int i = 0; i < summary.num_residuals; i++) {
+	//	std::cout << residuals[i] << std::endl;
+	//}
+
+	//x[3] = x[3] - 0.1;
+	//x[9] = x[9] - 0.1;
+	//problem.Evaluate(evalops, &total_cost, &residuals, &grad, &jac);
+	//std::cout << " grad new result \n";
+	//for (int i = 0; i < grad.size(); i++) {
+	//	std::cout << grad[i] << std::endl;
+	//}
+	//std::cout << "total new cost " << total_cost << std::endl;
+
+
+	//std::cout << "new residuals \n ";
+	//for (int i = 0; i < summary.num_residuals; i++) {
+	//	std::cout << residuals[i] << std::endl;
+	//}
+
+
+
+
+
+	////print transforms
+	//for (int i = 0; i < frames.size(); i++) {
+	//	std::cout << "Frame no. " << i << std::endl;
+	//	std::cout << "x: ";
+	//	if (i > 0) {
+	//		for (int j = 0; j < 6; j++) {
+	//			std::cout << *(x + 6 * (i-1) + j) << ";";
+	//		}
+	//	}
+	//	std::cout << "\n";
+	//	std::cout << "Resulting matrix : " << std::endl;
+	//	std::cout << frames[i]->transformation << std::endl;
+
+	//}
+
+
+
+
+	void Chunk::keyCortwoFrames(int a, int b)
+{
+	auto m = matches[getFramePairMatchIndex(a, b)]; //m is vector that contains sorted matches between frames a and b.
+	std::vector<match> fm; // filtered matches
+	int ncors = 5;
+	int removeindex = -1;
+	bool firstiteration = true;
+	float maxerror = std::numeric_limits<float>::max();
+	int count = ncors;
+	for (int i = 0; i < ncors; i++) {
+		fm.push_back(m[i]);
+	}
+	while (maxerror > 0.02 && fm.size() < ncors + 1 && count < m.size()) {
+		if (!firstiteration) {
+			fm.erase(fm.begin() + removeindex);
+			fm.push_back(m[count]);
+		} else {
+			//firstiteration = false;
+		}
+
+		Eigen::Matrix3Xd pointsa(3,fm.size());
+		Eigen::Matrix3Xd pointsb(3, fm.size());
+
+		for (int i = 0; i < fm.size(); i ++) {
+			pointsa.block<3, 1>(0, i) = Eigen::Vector3d(fm[i].p1(0), fm[i].p1(1), fm[i].p1(2)); // mf[i].p1;
+			pointsb.block<3, 1>(0, i) = Eigen::Vector3d(fm[i].p2(0), fm[i].p2(1), fm[i].p2(2));
+		}
+
+
+		// Find the centroids then shift to the origin
+		Eigen::Vector3d in_ctr = Eigen::Vector3d::Zero();
+		Eigen::Vector3d out_ctr = Eigen::Vector3d::Zero();
+		for (int col = 0; col < pointsa.cols(); col++) {
+			in_ctr += pointsa.col(col);
+			out_ctr += pointsb.col(col);
+		}
+		in_ctr /= pointsa.cols();
+		out_ctr /= pointsb.cols();
+		for (int col = 0; col < pointsa.cols(); col++) {
+			pointsa.col(col) -= in_ctr;
+			pointsb.col(col) -= out_ctr;
+		}
+
+		auto R = kabsch(pointsa, pointsb);
+		Eigen::Matrix4d rh;
+		rh.block<3, 3>(0, 0) = R;
+		rh(3, 3) = 1;
+
+		for (int i = 0; i < pointsa.cols(); i++) {
+			Eigen::Vector4d new_point = rh * Eigen::Vector4d(pointsa(0,i),pointsa(1,i),pointsa(2,i), 1.0);
+			pointsa.block<3, 1>(0, i) = new_point.block<3, 1>(0, 0);
+		}
+		//pointsa now cotains zero shifted and rotated coordinates. pointsb contains zero shift coordinates. Time to substract.
+		//drawEigen({ pointsa,pointsb });
+		//Eigen::Array<double,3,Eigen::Dynamic> err = (pointsa - pointsb).array();
+		//err = err.pow(2);
+
+		auto err = pointsa - pointsb;
+		Eigen::VectorXd e(pointsa.cols());
+		for (int i = 0; i < pointsa.cols(); i++) {
+			e(i) = err.block<3, 1>(i,0).norm();
+		}
+
+		int index;
+		maxerror = e.maxCoeff(&index);
+		removeindex = index;
+
+		firstiteration = false;
+		count++;
+
+	}
+
+	//filteredmatches.push_back(std::vector<match>());
+	filteredmatches[getFramePairMatchIndex(a, b)] = fm;
+
+}
+
+
+
+//im1 = cv::imread(rgbPath);
+////auto kpd = cv::BRISK::create();
+//auto kpd = cv::ORB::create();
+//kpd->detect(im1, orbKeypoints);
+//kpd->compute(im1, orbKeypoints, orbDescriptors);
+//
+//
+//keypoint_pcd->points_.resize(orbKeypoints.size());
+//auto intr = camera::PinholeCameraIntrinsic(camera::PinholeCameraIntrinsicParameters::PrimeSenseDefault).intrinsic_matrix_;
+//int nvalid = 0;
+//for (int i = 0; i < orbKeypoints.size(); i++) {
+//	Eigen::Vector3d tmp;
+//	auto k = orbKeypoints[i];
+//	auto x = k.pt.x;
+//	auto y = k.pt.y;
+//	auto d = rgbd->depth_.FloatValueAt(x, y).second;
+//	if (goodpixel(x, y)) {
+//		tmp[0] = (x - intr(0, 2)) * d / intr(0, 0);
+//		tmp[1] = (y - intr(1, 2)) * d / intr(1, 1);
+//		tmp[2] = d;
+//		keypoint_pcd->points_[nvalid] = tmp;
+//		nvalid++;
+//	}
+//
+//}
+
+
+
+
+
+
+
+
+
+		//return Ta * a - Tb * b. Stupid since we cannot or don't know how to use eigen
+		// residuals[0] =  cos(x1[2]) * cos(x1[1]) * p1(0) +
+		// 				cos(x1[2]) * sin(x1[1]) * sin(x1[0]) - sin(x1[2]) * cos(x1[0]) * p1(1) +
+		// 				cos(x1[2]) * sin(x1[1]) * cos(x1[0]) + sin(x1[2]) * sin(x1[0]) * p1(2)
+		// 				-cos(x2[2]) * cos(x2[1]) * p2(0) +
+		// 				cos(x2[2]) * sin(x2[1]) * sin(x2[0]) - sin(x2[2]) * cos(x2[0]) * p2(1) +
+		// 				cos(x2[2]) * sin(x2[1]) * cos(x2[0]) + sin(x2[2]) * sin(x2[0]) * p2(2)
+		// 				;
+		// residuals[1] = sin(x1[2]) * cos(x1[1]) * p1(0) +
+		// 			   sin(x1[2]) * sin(x1[1]) * sin(x1[0]) + cos(x1[2]) * cos(x1[0]) * p1(1) +
+		// 			   sin(x1[2]) * sin(x1[1]) * cos(x1[0]) - cos(x1[2]) * sin(x1[0]) * p1(2) +
+		// 			   -sin(x1[2]) * cos(x1[1]) * p1(0) +
+		// 			   sin(x1[2]) * sin(x1[1]) * sin(x1[0]) + cos(x1[2]) * cos(x1[0]) * p1(1) +
+		// 			   sin(x1[2]) * sin(x1[1]) * cos(x1[0]) - cos(x1[2]) * sin(x1[0]) * p1(2) +

@@ -1,0 +1,6 @@
+build/*
+.vscode/*
+buildPlayground/*
+buildTest/*
+imgui.ini
+pandiagui.ini

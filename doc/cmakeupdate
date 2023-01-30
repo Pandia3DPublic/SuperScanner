@@ -1,0 +1,7 @@
+to install latest version of cmake on linux:
+
+use binary files and system link to /usr/bin/cmake
+
+https://askubuntu.com/a/865294
+
+https://askubuntu.com/questions/355565/how-do-i-install-the-latest-version-of-cmake-from-the-command-line

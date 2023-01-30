@@ -1,0 +1,39 @@
+#version 330
+
+in FragmentData 
+{
+  vec3 color;
+  vec3 normal;
+  vec3 position;
+} FragmentIn;
+
+out vec4 FragColor;
+
+uniform vec3 lightDir;
+uniform vec3 viewPos;
+uniform vec3 lightColor;
+
+void main()
+{
+
+    // ambient
+    float ambientStrength = 0.3;
+    vec3 ambient = ambientStrength * lightColor;    
+    
+     // diffuse 
+	 //trick here for kind of global illumination
+    float diff = max(dot(FragmentIn.normal, lightDir), 0.0);
+	diff =  max(dot(FragmentIn.normal, -lightDir), diff);
+    vec3 diffuse = diff * lightColor;
+    
+    // specular
+    float specularStrength = 0.5;
+    vec3 viewDir = normalize(viewPos-FragmentIn.position); 
+    vec3 reflectDir = reflect(-lightDir, FragmentIn.normal);  
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
+    vec3 specular = specularStrength * spec * lightColor; 
+    
+    vec3 result = (ambient + diffuse + specular) * FragmentIn.color;
+    FragColor = vec4(result, 1.0);
+	//FragColor = vec4(fragment_color, 1.0);
+}

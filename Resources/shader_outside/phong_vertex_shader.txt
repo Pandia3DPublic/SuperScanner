@@ -1,0 +1,21 @@
+// Vertex shader:
+// ================
+#version 330 core
+//just pipe these 3 to the fragment shader
+layout (location = 0) in vec3 vertex_position;
+layout (location = 1) in vec3 vertex_color;
+layout (location = 2) in vec3 vertex_normal;
+
+
+out vec3 fragment_color;
+out vec3 VertPos;
+out vec3 Normal;
+
+uniform mat4 MVP;
+void main()
+{
+    gl_Position = MVP * vec4(vertex_position, 1.0);
+    VertPos = vertex_position;
+    Normal = vertex_normal;
+    fragment_color = vertex_color;
+}

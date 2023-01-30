@@ -1,0 +1,38 @@
+#version 330
+layout (triangles) in;
+layout (triangle_strip, max_vertices=3) out;
+
+uniform mat4 MVP;
+
+in VertexData 
+{
+  vec3 color;
+  vec3 normal;
+  vec3 position;
+} VertexIn[];
+
+out FragmentData 
+{
+  vec3 color;
+  vec3 normal;
+  vec3 position;
+} VertexOut;
+
+void main() 
+{
+  
+  if (!(gl_in[0].gl_Position.z == 0 || gl_in[1].gl_Position.z == 0 || gl_in[2].gl_Position.z == 0 )) {
+    
+    for(int i=0; i<gl_in.length(); i++) //gl_in.length()=3
+    {
+      VertexOut.color = VertexIn[i].color;
+      VertexOut.normal = VertexIn[i].normal;
+      VertexOut.position = VertexIn[i].position;
+      gl_Position = MVP * gl_in[i].gl_Position;
+      EmitVertex();
+    }
+    
+    EndPrimitive();
+  }
+  
+}  

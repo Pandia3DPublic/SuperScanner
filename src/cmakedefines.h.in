@@ -1,0 +1,6 @@
+#pragma once
+#define datapath @datapath@
+#define REFERENCEPATH @REFERENCEPATH@
+#define SHADER_PATH @SHADER_PATH@
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)

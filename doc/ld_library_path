@@ -1,0 +1,12 @@
+system wide ld_library_path so debugger like valgrind can be used:
+
+go to: etc/ld.so.conf.d/
+sudo touch mylib.conf
+sudo gedit mylib.conf
+add this line to created file: /home/tim/dev/SuperScanner/3rdParty/opencvCuda/lib/
+
+then run ldconfig to update the cache:
+sudo ldconfig
+
+
+see https://serverfault.com/questions/201709/how-to-set-ld-library-path-in-ubuntu
